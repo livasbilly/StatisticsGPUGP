@@ -5,6 +5,8 @@ import scipy.stats as stats
 import statsmodels.api as sm
 import plotly.express as px
 import os
+import scikit_posthocs as sp
+from statsmodels.stats.multicomp import pairwise_tukeyhsd
 
 # --- PAGE CONFIGURATION ---
 st.set_page_config(page_title="Historical GPU Statistical Analysis", layout="wide")
@@ -232,46 +234,164 @@ if df is not None:
         else:
             st.warning("Not enough data to perform Chi-Square test.")
 
-    # --- 5. ANOVA TESTING ---
+    # --- 5. STATISTICAL DIFFERENCE TESTING (MULTI-GROUP & POST-HOC) ---
     with tab5:
-        st.header("5. One-Way ANOVA Testing")
-        st.markdown("Tests if there is a statistically significant difference in variance between GPU Brands for a given metric.")
+        st.header("5. Statistical Difference Testing")
+        st.markdown("Tests if there is a statistically significant difference between groupings for a given metric. Automatically routes to the appropriate test (ANOVA, Kruskal-Wallis, Mann-Whitney U) based on data normality and group counts, and performs Post-Hoc analysis if required.")
 
-        anova_var = st.selectbox("Select metric to test between NVIDIA and AMD:", 
-                                  ['Historical Retail Price', '3DMark Benchmark Value', 'Historical Used Price'], 
-                                  index=0)
-
-        # Prepare groups
-        grp_nvidia = df[df['Brand'] == 'NVIDIA'][anova_var].dropna()
-        grp_amd = df[df['Brand'] == 'AMD'][anova_var].dropna()
-
-        col1, col2 = st.columns(2)
-        with col1:
-            st.metric("NVIDIA GPUs Count", len(grp_nvidia))
-            st.metric(f"NVIDIA Mean {anova_var}", f"{grp_nvidia.mean():.2f}")
-        with col2:
-            st.metric("AMD GPUs Count", len(grp_amd))
-            st.metric(f"AMD Mean {anova_var}", f"{grp_amd.mean():.2f}")
-
-        if len(grp_nvidia) > 0 and len(grp_amd) > 0:
-            # Perform ANOVA
-            f_stat, p_val = stats.f_oneway(grp_nvidia, grp_amd)
-
-            st.subheader("ANOVA Results")
-            st.write(f"**F-statistic:** `{f_stat:.4f}`")
-            st.write(f"**P-value:** `{p_val:.4e}`")
-
-            if p_val < 0.05:
-                st.success(f"**Interpretation:** There is a statistically significant difference in {anova_var} between NVIDIA and AMD GPUs.")
-            else:
-                st.info(f"**Interpretation:** There is NO statistically significant difference in {anova_var} between NVIDIA and AMD GPUs.")
-            
-            # Optional Boxplot for visual confirmation
-            st.subheader("Distribution Visualization")
-            fig = px.box(df.dropna(subset=[anova_var]), x="Brand", y=anova_var, color="Brand", points="all")
-            st.plotly_chart(fig, use_container_width=True)
+        # 1. Independent Variable Selection
+        group_var = st.selectbox("Select Grouping Variable (Independent):", ['Brand', 'VRAM Tier'], index=0)
+        
+        # Determine valid dependent metrics
+        all_metrics = ['Historical Retail Price', 'Historical Used Price', '3DMark Benchmark Value', 'Watt Rating', 'VRAM']
+        if group_var == 'VRAM Tier':
+            valid_metrics = [m for m in all_metrics if m != 'VRAM']
         else:
-            st.warning("Not enough data to run the ANOVA test. Ensure both AMD and NVIDIA have valid records.")
+            valid_metrics = all_metrics
+            
+        anova_var = st.selectbox("Select Metric (Dependent):", valid_metrics, index=0)
+
+        # 2. Data Preparation based on independent variable
+        if group_var == 'Brand':
+            plot_x = 'Brand'
+            df_test = df.dropna(subset=[plot_x, anova_var]).copy()
+            unique_groups = sorted(df_test[plot_x].unique())
+            selected_groups = st.multiselect("Select Brands to Include:", unique_groups, default=unique_groups)
+        else:
+            plot_x = 'VRAM'
+            df_test = df.dropna(subset=[plot_x, anova_var]).copy()
+            
+            unique_vram_raw = sorted(df_test['VRAM'].unique())
+            vram_label_map = {v: f"{int(v)}GB" if v.is_integer() else f"{v}GB" for v in unique_vram_raw}
+            
+            selected_vram_labels = st.multiselect("Select VRAM Tiers to Include:", list(vram_label_map.values()), default=list(vram_label_map.values()))
+            
+            selected_groups_raw = [k for k, v in vram_label_map.items() if v in selected_vram_labels]
+            df_test = df_test[df_test['VRAM'].isin(selected_groups_raw)].copy()
+            df_test['VRAM Tier'] = df_test['VRAM'].map(vram_label_map)
+            plot_x = 'VRAM Tier'
+            selected_groups = selected_vram_labels
+
+        if not selected_groups or len(selected_groups) < 2:
+            st.warning("Please select at least two distinct groups to compare.")
+        else:
+            if group_var == 'Brand':
+                df_test = df_test[df_test[plot_x].isin(selected_groups)]
+                
+            groups_data = {}
+            valid_group_count = 0
+            for g in selected_groups:
+                g_data = df_test[df_test[plot_x] == g][anova_var]
+                if len(g_data) >= 3:
+                    groups_data[g] = g_data
+                    valid_group_count += 1
+            
+            cols = st.columns(len(groups_data) if len(groups_data) > 0 else 1)
+            for i, (g_name, g_data) in enumerate(groups_data.items()):
+                if i < len(cols):
+                    with cols[i]:
+                        st.metric(f"{g_name} Count", len(g_data))
+                        st.metric(f"{g_name} Mean", f"{g_data.mean():.2f}")
+
+            if valid_group_count < 2:
+                st.warning("Not enough data. Ensure at least two selected groups have $\ge$ 3 valid records.")
+            else:
+                # Step A: Assumption Check (Normality)
+                normality_p_values = []
+                for g_data in groups_data.values():
+                    _, p_val = stats.shapiro(g_data)
+                    normality_p_values.append(p_val)
+                    
+                shapiro_p = min(normality_p_values)
+                is_normal = shapiro_p >= 0.05
+                
+                # Step B: Test Selection
+                data_series = list(groups_data.values())
+                perform_posthoc = False
+                posthoc_type = None
+                
+                if is_normal and valid_group_count == 2:
+                    st.markdown("🟢 **Test Used: One-Way ANOVA (2 Groups)**")
+                    stat, p_val = stats.f_oneway(*data_series)
+                    st.write(f"**F-statistic:** `{stat:.4f}` | **P-value:** `{p_val:.4e}`")
+                    
+                elif not is_normal and valid_group_count == 2:
+                    st.markdown("🟡 **Test Used: Mann-Whitney U**")
+                    st.warning("Data Distribution Alert: Your data failed normality. Automatically switched to Mann-Whitney U.")
+                    stat, p_val = stats.mannwhitneyu(data_series[0], data_series[1], alternative='two-sided')
+                    st.write(f"**U-statistic:** `{stat:.4f}` | **P-value:** `{p_val:.4e}`")
+                    
+                elif is_normal and valid_group_count >= 3:
+                    st.markdown("🟢 **Test Used: One-Way ANOVA (3+ Groups)**")
+                    stat, p_val = stats.f_oneway(*data_series)
+                    st.write(f"**F-statistic:** `{stat:.4f}` | **P-value:** `{p_val:.4e}`")
+                    if p_val < 0.05:
+                        perform_posthoc = True
+                        posthoc_type = 'tukey'
+                        
+                else:
+                    st.markdown("🟡 **Test Used: Kruskal-Wallis H Test**")
+                    st.warning("Data Distribution Alert: Your data failed normality. Automatically switched to Kruskal-Wallis (the non-parametric equivalent of ANOVA for 3+ groups).")
+                    stat, p_val = stats.kruskal(*data_series)
+                    st.write(f"**H-statistic:** `{stat:.4f}` | **P-value:** `{p_val:.4e}`")
+                    if p_val < 0.05:
+                        perform_posthoc = True
+                        posthoc_type = 'dunn'
+
+                if p_val < 0.05:
+                    st.success(f"**Interpretation:** There is a statistically significant difference in {anova_var} between the groups.")
+                else:
+                    st.info(f"**Interpretation:** There is NO statistically significant difference in {anova_var} between the groups.")
+
+                # Step C: Post-Hoc Routing for 3+ Groups
+                if perform_posthoc:
+                    st.divider()
+                    st.subheader("Pairwise Comparisons")
+                    st.markdown("This post-hoc test identifies exactly which groupings are driving the significant difference found in the main test.")
+                    
+                    if posthoc_type == 'tukey':
+                        st.markdown("🔵 **Post-Hoc Test: Tukey's HSD**")
+                        flat_data = []
+                        flat_labels = []
+                        for g_name, g_data in groups_data.items():
+                            flat_data.extend(g_data.tolist())
+                            flat_labels.extend([g_name] * len(g_data))
+                            
+                        tukey = pairwise_tukeyhsd(endog=flat_data, groups=flat_labels, alpha=0.05)
+                        tukey_df = pd.DataFrame(data=tukey._results_table.data[1:], columns=tukey._results_table.data[0])
+                        st.table(tukey_df)
+
+                    elif posthoc_type == 'dunn':
+                        st.markdown("🔵 **Post-Hoc Test: Dunn's Test**")
+                        flat_data = []
+                        flat_labels = []
+                        for g_name, g_data in groups_data.items():
+                            flat_data.extend(g_data.tolist())
+                            flat_labels.extend([g_name] * len(g_data))
+                        
+                        df_posthoc = pd.DataFrame({'val': flat_data, 'group': flat_labels})
+                        dunn_matrix = sp.posthoc_dunn(df_posthoc, val_col='val', group_col='group', p_adjust='bonferroni')
+                        
+                        pairs = []
+                        labels_list = list(dunn_matrix.columns)
+                        for r in range(len(labels_list)):
+                            for c in range(r + 1, len(labels_list)):
+                                g1 = labels_list[r]
+                                g2 = labels_list[c]
+                                p_adj = dunn_matrix.loc[g1, g2]
+                                sig = p_adj < 0.05
+                                pairs.append({
+                                    "Comparison": f"{g1} vs. {g2}",
+                                    "Adjusted P-Value": f"{p_adj:.4e}",
+                                    "Significant (p<0.05)": "Yes" if sig else "No"
+                                })
+                                
+                        dunn_df = pd.DataFrame(pairs)
+                        st.table(dunn_df)
+                
+                st.subheader("Distribution Visualization")
+                fig = px.box(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", title=f"Distribution of {anova_var} by {plot_x}")
+                st.plotly_chart(fig, use_container_width=True)
 
     # --- 6. TIME SERIES ANALYSIS ---
     with tab6:
