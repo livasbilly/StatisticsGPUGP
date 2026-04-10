@@ -4,3 +4,4 @@ numpy
 scipy
 statsmodels
 plotly
+scikit-posthocs
