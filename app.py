@@ -284,23 +284,38 @@ if df is not None:
         if not selected_groups or len(selected_groups) < 2:
             st.warning("Please select at least two distinct groups to compare.")
         else:
+            # Enforce strict sensible ordering (alphabetical for Brand, numeric for VRAM)
             if group_var == 'Brand':
+                selected_groups = sorted(selected_groups)
                 df_test = df_test[df_test[plot_x].isin(selected_groups)]
+            else:
+                base_order = list(vram_label_map.values())
+                selected_groups = sorted(selected_groups, key=lambda x: base_order.index(x) if x in base_order else 0)
                 
-            groups_data = {}
-            valid_group_count = 0
-            for g in selected_groups:
+            # Show all metrics regardless of count so missing categories are clearly visible
+            cols = st.columns(len(selected_groups) if len(selected_groups) > 0 else 1)
+            for i, g in enumerate(selected_groups):
                 g_data = df_test[df_test[plot_x] == g][anova_var]
-                if len(g_data) >= 3:
-                    groups_data[g] = g_data
-                    valid_group_count += 1
-            
-            cols = st.columns(len(groups_data) if len(groups_data) > 0 else 1)
-            for i, (g_name, g_data) in enumerate(groups_data.items()):
                 if i < len(cols):
                     with cols[i]:
-                        st.metric(f"{g_name} Count", len(g_data))
-                        st.metric(f"{g_name} Mean", f"{g_data.mean():.2f}")
+                        st.metric(f"{g} Count", len(g_data))
+                        if len(g_data) > 0:
+                            st.metric(f"{g} Mean", f"{g_data.mean():.2f}")
+                        else:
+                            st.metric(f"{g} Mean", "N/A")
+
+            # Filter for rigorous statistical testing
+            valid_groups = [g for g in selected_groups if len(df_test[df_test[plot_x] == g][anova_var]) >= 3]
+            excluded_groups = [g for g in selected_groups if g not in valid_groups]
+            
+            if excluded_groups:
+                st.warning(f"Note: Groups with insufficient data (n < 3) were excluded from statistical testing and plots: {', '.join(excluded_groups)}")
+
+            groups_data = {g: df_test[df_test[plot_x] == g][anova_var] for g in valid_groups}
+            valid_group_count = len(valid_groups)
+            
+            # Filter df_test so plots match the tests exactly (excluded items are completely dropped)
+            df_test = df_test[df_test[plot_x].isin(valid_groups)]
 
             if valid_group_count < 2:
                 st.warning("Not enough data. Ensure at least two selected groups have $\ge$ 3 valid records.")
@@ -399,12 +414,15 @@ if df is not None:
                         st.table(dunn_df)
                 
                 st.subheader("Distribution Visualization")
+                # Force Plotly to respect the numerical/logical category order rather than alphabetical
+                cat_order = {plot_x: valid_groups}
+                
                 if is_normal:
-                    fig = px.box(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", title=f"Distribution of {anova_var} by {plot_x}", labels=LABEL_MAP)
+                    fig = px.box(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", title=f"Distribution of {anova_var} by {plot_x}", labels=LABEL_MAP, category_orders=cat_order)
                     fig.update_traces(boxmean=True)
                     st.plotly_chart(fig, use_container_width=True)
                 else:
-                    fig = px.violin(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", box=True, title=f"Distribution of {anova_var} by {plot_x}", labels=LABEL_MAP)
+                    fig = px.violin(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", box=True, title=f"Distribution of {anova_var} by {plot_x}", labels=LABEL_MAP, category_orders=cat_order)
                     st.plotly_chart(fig, use_container_width=True)
                     st.caption("Showing a Violin & Swarm plot. Because this data does not follow a normal distribution, this chart highlights the data's density and Median, which are evaluated by the non-parametric test.")
 
