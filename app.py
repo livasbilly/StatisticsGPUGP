@@ -293,16 +293,20 @@ if df is not None:
                 selected_groups = sorted(selected_groups, key=lambda x: base_order.index(x) if x in base_order else 0)
                 
             # Show all metrics regardless of count so missing categories are clearly visible
-            cols = st.columns(len(selected_groups) if len(selected_groups) > 0 else 1)
-            for i, g in enumerate(selected_groups):
-                g_data = df_test[df_test[plot_x] == g][anova_var]
-                if i < len(cols):
-                    with cols[i]:
-                        st.metric(f"{g} Count", len(g_data))
-                        if len(g_data) > 0:
-                            st.metric(f"{g} Mean", f"{g_data.mean():.2f}")
-                        else:
-                            st.metric(f"{g} Mean", "N/A")
+            # We break this into a grid (max 4 columns per row) to prevent text truncation (...)
+            max_cols_per_row = 4
+            for i in range(0, len(selected_groups), max_cols_per_row):
+                chunk = selected_groups[i:i + max_cols_per_row]
+                cols = st.columns(max_cols_per_row)
+                for j, g in enumerate(chunk):
+                    g_data = df_test[df_test[plot_x] == g][anova_var]
+                    with cols[j]:
+                        with st.container(border=True):
+                            st.metric(f"{g} Count", len(g_data))
+                            if len(g_data) > 0:
+                                st.metric(f"{g} Mean", f"{g_data.mean():.2f}")
+                            else:
+                                st.metric(f"{g} Mean", "N/A")
 
             # Filter for rigorous statistical testing
             valid_groups = [g for g in selected_groups if len(df_test[df_test[plot_x] == g][anova_var]) >= 3]
