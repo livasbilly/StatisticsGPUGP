@@ -73,6 +73,15 @@ if os.path.exists(context_file):
 else:
     context_text = "> *Context file not found. Place 'Statistical Contextualization of GPUs.txt' in the directory.*"
 
+LABEL_MAP = {
+    'Historical Retail Price': 'Historical Retail Price (USD)',
+    'Historical Used Price': 'Historical Used Price (USD)',
+    'Retail Price': 'Retail Price (USD)',
+    'Used Price': 'Used Price (USD)',
+    'Watt Rating': 'Watt Rating (W)',
+    'VRAM': 'VRAM (GB)'
+}
+
 if df is not None:
     # --- NAVIGATION TABS ---
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
@@ -166,7 +175,7 @@ if df is not None:
                 # Scatter Plot
                 fig = px.scatter(reg_df, x=x_var, y=y_var, color='Brand', hover_data=['Name'], 
                                  trendline="ols", trendline_color_override="red",
-                                 title=f"Regression: {x_var} vs {y_var}")
+                                 title=f"Regression: {x_var} vs {y_var}", labels=LABEL_MAP)
                 st.plotly_chart(fig, use_container_width=True)
 
                 # Regression Statistics via statsmodels
@@ -390,8 +399,14 @@ if df is not None:
                         st.table(dunn_df)
                 
                 st.subheader("Distribution Visualization")
-                fig = px.box(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", title=f"Distribution of {anova_var} by {plot_x}")
-                st.plotly_chart(fig, use_container_width=True)
+                if is_normal:
+                    fig = px.box(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", title=f"Distribution of {anova_var} by {plot_x}", labels=LABEL_MAP)
+                    fig.update_traces(boxmean=True)
+                    st.plotly_chart(fig, use_container_width=True)
+                else:
+                    fig = px.violin(df_test, x=plot_x, y=anova_var, color=plot_x, points="all", box=True, title=f"Distribution of {anova_var} by {plot_x}", labels=LABEL_MAP)
+                    st.plotly_chart(fig, use_container_width=True)
+                    st.caption("Showing a Violin & Swarm plot. Because this data does not follow a normal distribution, this chart highlights the data's density and Median, which are evaluated by the non-parametric test.")
 
     # --- 6. TIME SERIES ANALYSIS ---
     with tab6:
@@ -412,7 +427,7 @@ if df is not None:
 
                 fig = px.line(ts_df, x='Date', y=price_type, color='Name', markers=True,
                               title=f"Historical {price_type} Over Time",
-                              labels={price_type: f"Price (USD)", "Date": "Date"})
+                              labels=LABEL_MAP)
                 st.plotly_chart(fig, use_container_width=True)
             else:
                 st.warning("Please select at least one GPU to visualize.")
