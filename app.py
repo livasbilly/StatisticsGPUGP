@@ -83,6 +83,9 @@ LABEL_MAP = {
 }
 
 if df is not None:
+    if 'VRAM' in df.columns:
+        df['VRAM Tier'] = df['VRAM'].apply(lambda v: f"{int(v)}GB" if pd.notna(v) and float(v).is_integer() else f"{v}GB" if pd.notna(v) else np.nan)
+
     # --- NAVIGATION TABS ---
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "Context & Data Overview", 
@@ -203,45 +206,162 @@ if df is not None:
     # --- 4. CHI-SQUARE TESTING ---
     with tab4:
         st.header("4. Chi-Square Testing of Independence")
-        st.markdown("Tests if there is a significant association between GPU Brand and a binned continuous variable.")
+        st.markdown("Tests if there is a significant association between two categorical variables.")
 
-        target_var = st.selectbox("Select Continuous Variable to Bin:", 
-                                  ['Historical Retail Price', '3DMark Benchmark Value', 'Watt Rating'], 
-                                  index=0)
-        
-        num_bins = st.slider("Number of Categories (Bins)", min_value=2, max_value=5, value=3)
+        cats = ['Brand', 'VRAM Tier']
+        conts = ['Historical Retail Price', 'Historical Used Price', 'Watt Rating', '3DMark Benchmark Value']
+        all_vars = cats + conts
 
-        # Drop NaNs first
-        chi_df = df.dropna(subset=['Brand', target_var]).copy()
+        col1, col2 = st.columns(2)
+        with col1:
+            var1 = st.selectbox("Select Variable 1 (Rows):", all_vars, index=0)
+        with col2:
+            var2 = st.selectbox("Select Variable 2 (Columns):", all_vars, index=1)
 
-        if len(chi_df) > 0:
-            # Binning logic (using qcut for quantiles, fallback to cut if edges are non-unique)
-            labels = ["Low", "Medium", "High", "Very High", "Extreme"][:num_bins]
-            try:
-                chi_df[f'{target_var}_Binned'] = pd.qcut(chi_df[target_var], q=num_bins, labels=labels, duplicates='drop')
-            except Exception:
-                chi_df[f'{target_var}_Binned'] = pd.cut(chi_df[target_var], bins=num_bins, labels=labels)
-            
-            # Contingency table
-            contingency_table = pd.crosstab(chi_df['Brand'], chi_df[f'{target_var}_Binned'])
-            
-            st.subheader("Contingency Table")
-            st.dataframe(contingency_table)
-
-            # Perform test
-            chi2, p_val, dof, expected = stats.chi2_contingency(contingency_table)
-            
-            st.subheader("Chi-Square Results")
-            st.write(f"**Chi-Square Statistic:** `{chi2:.4f}`")
-            st.write(f"**P-value:** `{p_val:.4e}`")
-            st.write(f"**Degrees of Freedom:** `{dof}`")
-
-            if p_val < 0.05:
-                st.success(f"**Interpretation:** There is a statistically significant association between GPU Brand and {target_var}.")
-            else:
-                st.info(f"**Interpretation:** We fail to reject the null hypothesis. There is no significant association between GPU Brand and {target_var}.")
+        if var1 == var2:
+            st.warning("Please select two distinct variables to perform the Chi-Square test.")
         else:
-            st.warning("Not enough data to perform Chi-Square test.")
+            col_b1, col_b2 = st.columns(2)
+            bins_var1 = None
+            bins_var2 = None
+
+            if var1 in conts:
+                with col_b1:
+                    bins_var1 = st.slider(f"Number of Categories for {var1}", min_value=2, max_value=5, value=3, key='bins1')
+            if var2 in conts:
+                with col_b2:
+                    bins_var2 = st.slider(f"Number of Categories for {var2}", min_value=2, max_value=5, value=3, key='bins2')
+
+            chi_df = df.dropna(subset=[var1, var2]).copy()
+
+            import re
+            def alphanumeric_key(val):
+                s = str(val)
+                match = re.match(r'^(\d+)', s)
+                if match:
+                    return (0, int(match.group(1)), s)
+                return (1, 0, s)
+
+            def render_grouping_tool(var_name):
+                st.subheader(f"Category Grouping Tool: {var_name}")
+                st.markdown(f"Assign raw '{var_name}' categories into predefined parent buckets.")
+                
+                raw_options = sorted(chi_df[var_name].unique().tolist(), key=alphanumeric_key)
+                assigned_options = set()
+                buckets = {}
+                
+                predefined_groups = []
+                if var_name == 'Brand':
+                    predefined_groups = ['AMD', 'NVIDIA']
+                elif var_name == 'VRAM Tier':
+                    predefined_groups = ['Budget Floor', 'Enthusiast Core', 'Halo']
+                else:
+                    return var_name
+
+                for i, bucket_name in enumerate(predefined_groups):
+                    col_name, col_sel = st.columns([1, 2])
+                    col_name.markdown(f"<p style='margin-top: 10px'><b>{bucket_name}</b></p>", unsafe_allow_html=True)
+                    # Label is required but visually collapsed to align properly
+                    selected = col_sel.multiselect(f"Assign items to {bucket_name}", raw_options, key=f"sel_{var_name}_{i}", label_visibility="collapsed")
+                    
+                    if selected:
+                        buckets[bucket_name] = selected
+                        assigned_options.update(selected)
+                
+                unassigned = [opt for opt in raw_options if opt not in assigned_options]
+                if unassigned:
+                    st.markdown(f"**Unassigned Pool:** `{', '.join([str(x) for x in unassigned])}`")
+                else:
+                    st.markdown("**Unassigned Pool:** *All items assigned!*")
+                
+                if buckets:
+                    bucket_map = {item: k for k, v in buckets.items() for item in v}
+                    col_id = f'{var_name} (Grouped)'
+                    chi_df[col_id] = chi_df[var_name].apply(lambda x: bucket_map.get(x, x))
+                    return col_id
+                return var_name
+
+            var1_col = var1
+            var2_col = var2
+
+            if var1 in cats:
+                var1_col = render_grouping_tool(var1)
+                st.divider()
+            if var2 in cats:
+                var2_col = render_grouping_tool(var2)
+                st.divider()
+
+            if len(chi_df) > 0:
+                # Binning logic
+                def bin_variable(dataframe, var_name, num_bins):
+                    labels = ["Low", "Medium", "High", "Very High", "Extreme"][:num_bins]
+                    try:
+                        return pd.qcut(dataframe[var_name], q=num_bins, labels=labels, duplicates='drop')
+                    except Exception:
+                        return pd.cut(dataframe[var_name], bins=num_bins, labels=labels)
+
+                var1_final = f'{var1}_Binned' if var1 in conts else var1_col
+                var2_final = f'{var2}_Binned' if var2 in conts else var2_col
+
+                if var1 in conts:
+                    chi_df[var1_final] = bin_variable(chi_df, var1, bins_var1)
+                if var2 in conts:
+                    chi_df[var2_final] = bin_variable(chi_df, var2, bins_var2)
+
+                # Remove any nan bins
+                chi_df = chi_df.dropna(subset=[var1_final, var2_final])
+
+                if len(chi_df) > 0:
+                    contingency_table = pd.crosstab(chi_df[var1_final], chi_df[var2_final])
+                    
+                    # Apply Alphanumeric Sort for categorical axes manually
+                    if var1 in cats:
+                        sorted_idx = sorted(contingency_table.index, key=alphanumeric_key)
+                        contingency_table = contingency_table.reindex(index=sorted_idx)
+                    if var2 in cats:
+                        sorted_cols = sorted(contingency_table.columns, key=alphanumeric_key)
+                        contingency_table = contingency_table.reindex(columns=sorted_cols)
+
+                    if contingency_table.shape[0] < 2 or contingency_table.shape[1] < 2:
+                        st.warning("Not enough distinct categories for testing. Try adjusting the bin counts/groups.")
+                    else:
+                        # Perform test
+                        chi2, p_val, dof, expected = stats.chi2_contingency(contingency_table)
+                        expected_table = pd.DataFrame(expected, index=contingency_table.index, columns=contingency_table.columns)
+                        
+                        st.subheader("Chi-Square Results")
+                        st.write(f"**Chi-Square Statistic:** `{chi2:.4f}`")
+                        st.write(f"**Degrees of Freedom:** `{dof}`")
+                        st.write(f"**P-value:** `{p_val:.4e}`")
+
+                        if p_val < 0.05:
+                            st.success(f"**Interpretation:** There is a statistically significant association between {var1_col} and {var2_col}.")
+                        else:
+                            st.info(f"**Interpretation:** We fail to reject the null hypothesis. There is no significant association between {var1_col} and {var2_col}.")
+
+                        st.subheader("Contingency Table")
+                        table_view = st.radio("Select View:", ["Observed Counts", "Expected Counts"], horizontal=True)
+                        if table_view == "Observed Counts":
+                            st.dataframe(contingency_table, use_container_width=True)
+                        else:
+                            st.dataframe(expected_table.round(2), use_container_width=True)
+                                
+                        # Standardized Residuals Heatmap
+                        st.subheader("Heatmap of Standardized Residuals")
+                        st.markdown("Colors represent the deviation of observed counts from expected counts. Large positive values (blue) mean more observations than expected; large negative values (red) mean fewer observations than expected.")
+                        residuals = (contingency_table - expected_table) / np.sqrt(expected_table)
+                        
+                        fig = px.imshow(residuals, 
+                                        text_auto=".2f", 
+                                        aspect="auto",
+                                        color_continuous_scale="RdBu",
+                                        color_continuous_midpoint=0,
+                                        labels=dict(x=var2_col, y=var1_col, color="Residual"))
+                        st.plotly_chart(fig, use_container_width=True)
+                else:
+                    st.warning("Not enough valid binned data to perform Chi-Square test.")
+            else:
+                st.warning("Not enough valid data points for selected variables.")
 
     # --- 5. STATISTICAL DIFFERENCE TESTING (MULTI-GROUP & POST-HOC) ---
     with tab5:
