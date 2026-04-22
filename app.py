@@ -4,6 +4,7 @@ import numpy as np
 import scipy.stats as stats
 import statsmodels.api as sm
 import plotly.express as px
+import plotly.graph_objects as go
 import os
 import scikit_posthocs as sp
 from statsmodels.stats.multicomp import pairwise_tukeyhsd
@@ -175,25 +176,55 @@ if df is not None:
             reg_df = df.dropna(subset=[x_var, y_var])
             
             if len(reg_df) > 1:
-                # Scatter Plot
+                # Scatter Plot (No default trendline)
                 fig = px.scatter(reg_df, x=x_var, y=y_var, color='Brand', hover_data=['Name'], 
-                                 trendline="ols", trendline_color_override="red",
                                  title=f"Regression: {y_var} vs {x_var}", labels=LABEL_MAP)
-                st.plotly_chart(fig, use_container_width=True)
 
                 # Regression Statistics via statsmodels
-                X = sm.add_constant(reg_df[x_var])
-                Y = reg_df[y_var]
-                model = sm.OLS(Y, X).fit()
+                X_vals = reg_df[x_var]
+                Y_vals = reg_df[y_var]
+
+                # Regression 1: Y on X (minimizes vertical errors)
+                X1 = sm.add_constant(X_vals)
+                model1 = sm.OLS(Y_vals, X1).fit()
+                c1 = model1.params['const']
+                m1 = model1.params[x_var]
+
+                # Regression 2: X on Y (minimizes horizontal errors)
+                Y2 = sm.add_constant(Y_vals)
+                model2 = sm.OLS(X_vals, Y2).fit()
+                c2 = model2.params['const']
+                m2 = model2.params[y_var]
+
+                # Convert Eq 2 to Y = mX + c format for plotting on the same Y vs X axes
+                # X = m2 * Y + c2  =>  m2 * Y = X - c2  =>  Y = (1/m2) * X - (c2/m2)
+                m2_plot = 1 / m2
+                c2_plot = -c2 / m2
+
+                # Add regression lines to the figure
+                x_range = np.array([X_vals.min(), X_vals.max()])
                 
-                intercept = model.params['const']
-                slope = model.params[x_var]
-                r_squared = model.rsquared
-                p_value = model.pvalues[x_var]
+                y_range_1 = m1 * x_range + c1
+                fig.add_trace(go.Scatter(x=x_range, y=y_range_1, mode='lines', 
+                                         name='Y on X (Vertical Errors)', 
+                                         line=dict(color='red', width=2)))
+                
+                y_range_2 = m2_plot * x_range + c2_plot
+                fig.add_trace(go.Scatter(x=x_range, y=y_range_2, mode='lines', 
+                                         name='X on Y (Horizontal Errors)', 
+                                         line=dict(color='blue', width=2, dash='dash')))
+
+                st.plotly_chart(fig, use_container_width=True)
 
                 st.subheader("Regression Statistics")
-                st.write(f"**Equation:** `Y = {slope:.4f} * X + {intercept:.4f}`")
-                st.write(f"**R-squared:** `{r_squared:.4f}`")
+                
+                st.markdown(f"**Equation 1 (Y on X):** `Y = {m1:.4f} * X {c1:+.4f}` *(minimizes vertical errors)*")
+                st.markdown(f"**Equation 2 (X on Y):** `X = {m2:.4f} * Y {c2:+.4f}` &nbsp; $\\Rightarrow$ &nbsp; plotted as `Y = {m2_plot:.4f} * X {c2_plot:+.4f}` *(minimizes horizontal errors)*")
+                
+                r_squared_calc = m1 * m2
+                p_value = model1.pvalues[x_var]
+
+                st.write(f"**R-squared ($R^2$):** `{r_squared_calc:.4f}` *(Calculated as the product of the two slopes: {m1:.4f} * {m2:.4f})*")
                 st.write(f"**P-value:** `{p_value:.4e}`")
                 
                 if p_value < 0.05:
