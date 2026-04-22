@@ -178,7 +178,7 @@ if df is not None:
                 # Scatter Plot
                 fig = px.scatter(reg_df, x=x_var, y=y_var, color='Brand', hover_data=['Name'], 
                                  trendline="ols", trendline_color_override="red",
-                                 title=f"Regression: {x_var} vs {y_var}", labels=LABEL_MAP)
+                                 title=f"Regression: {y_var} vs {x_var}", labels=LABEL_MAP)
                 st.plotly_chart(fig, use_container_width=True)
 
                 # Regression Statistics via statsmodels
