@@ -88,13 +88,14 @@ if df is not None:
         df['VRAM Tier'] = df['VRAM'].apply(lambda v: f"{int(v)}GB" if pd.notna(v) and float(v).is_integer() else f"{v}GB" if pd.notna(v) else np.nan)
 
     # --- NAVIGATION TABS ---
-    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6, tab7 = st.tabs([
         "Context & Data Overview", 
         "Descriptive Statistics", 
         "Regression Analysis", 
         "Chi-Square Testing", 
         "ANOVA Testing",
-        "Time Series Analysis"
+        "Time Series Analysis",
+        "Q&A"
     ])
 
     # --- 1. CONTEXT & DATA OVERVIEW ---
@@ -236,7 +237,7 @@ if df is not None:
 
     # --- 4. CHI-SQUARE TESTING ---
     with tab4:
-        st.header("4. Chi-Square Testing of Independence")
+        st.header("4. Chi-Square Testing of Independence", help="**The 'Expectation vs. Reality' Test (for categories)**\n\n* **What it does:** It checks for relationships between *categorical* variables (things you count in buckets, like \"Brand: AMD vs NVIDIA\" or \"Color: Red vs Blue\").\n* **How it works:** It compares the actual number of items you counted in each category against the number you *expected* to see if everything was completely random. If the actual counts wildly differ from the expected counts, there is a statistical relationship.")
         st.markdown("Tests if there is a significant association between two categorical variables.")
 
         cats = ['Brand', 'VRAM Tier']
@@ -476,6 +477,7 @@ if df is not None:
                 st.warning("Not enough data. Ensure at least two selected groups have $\ge$ 3 valid records.")
             else:
                 # Step A: Assumption Check (Normality)
+                st.markdown("##### 🔬 Normality Check: Shapiro-Wilk Test", help="**The 'Bell Curve' Test**\n\n* **What it does:** It checks if your data follows a normal distribution (a symmetrical, bell-shaped curve).\n* **When to use it:** You run this *before* other tests. Many tests (like ANOVA) require your data to be normal. If Shapiro-Wilk says your data is *not* normal (skewed), you have to use alternative, \"non-parametric\" tests (like Mann-Whitney).")
                 normality_p_values = []
                 for g_data in groups_data.values():
                     _, p_val = stats.shapiro(g_data)
@@ -490,18 +492,18 @@ if df is not None:
                 posthoc_type = None
                 
                 if is_normal and valid_group_count == 2:
-                    st.markdown("🟢 **Test Used: One-Way ANOVA (2 Groups)**")
+                    st.markdown("🟢 **Test Used: One-Way ANOVA (2 Groups)**", help="**The 'Big Picture' Test (for 3+ groups)**\n\n* **What it does:** It compares the averages (means) of three or more groups to see if at least one group is statistically different from the others.\n* **The Catch:** It tells you *that* a difference exists somewhere, but it does not tell you *which* specific groups are different.")
                     stat, p_val = stats.f_oneway(*data_series)
                     st.write(f"**F-statistic:** `{stat:.4f}` | **P-value:** `{p_val:.4e}`")
                     
                 elif not is_normal and valid_group_count == 2:
-                    st.markdown("🟡 **Test Used: Mann-Whitney U**")
+                    st.markdown("🟡 **Test Used: Mann-Whitney U**", help="**The 'Ranked Match' Test (for 2 groups)**\n\n* **What it does:** It compares two groups when your data is messy, has extreme outliers, or failed the Shapiro-Wilk test (meaning it isn't a bell curve).\n* **How it works:** Instead of comparing averages, it lumps all the data from both groups together, ranks them from lowest to highest, and checks if one group's values consistently rank higher than the other.")
                     st.warning("Data Distribution Alert: Your data failed normality. Automatically switched to Mann-Whitney U.")
                     stat, p_val = stats.mannwhitneyu(data_series[0], data_series[1], alternative='two-sided')
                     st.write(f"**U-statistic:** `{stat:.4f}` | **P-value:** `{p_val:.4e}`")
                     
                 elif is_normal and valid_group_count >= 3:
-                    st.markdown("🟢 **Test Used: One-Way ANOVA (3+ Groups)**")
+                    st.markdown("🟢 **Test Used: One-Way ANOVA (3+ Groups)**", help="**The 'Big Picture' Test (for 3+ groups)**\n\n* **What it does:** It compares the averages (means) of three or more groups to see if at least one group is statistically different from the others.\n* **The Catch:** It tells you *that* a difference exists somewhere, but it does not tell you *which* specific groups are different.")
                     stat, p_val = stats.f_oneway(*data_series)
                     st.write(f"**F-statistic:** `{stat:.4f}` | **P-value:** `{p_val:.4e}`")
                     if p_val < 0.05:
@@ -525,11 +527,11 @@ if df is not None:
                 # Step C: Post-Hoc Routing for 3+ Groups
                 if perform_posthoc:
                     st.divider()
-                    st.subheader("Pairwise Comparisons")
+                    st.subheader("Pairwise Comparisons", help="**The 'Detective' Tests**\n\n* **What it does:** \"Post-hoc\" means \"after this.\" These are follow-up tests you run *only* if your ANOVA finds a significant difference. They do the detective work to find exactly where the differences lie.")
                     st.markdown("This post-hoc test identifies exactly which groupings are driving the significant difference found in the main test.")
                     
                     if posthoc_type == 'tukey':
-                        st.markdown("🔵 **Post-Hoc Test: Tukey's HSD**")
+                        st.markdown("🔵 **Post-Hoc Test: Tukey's HSD**", help="**A Specific Post-Hoc Test**\n\n* **What it does:** It systematically pairs up every single group against each other (A vs B, A vs C, B vs C) to tell you exactly which groups differ. It mathematically adjusts the rules so you don’t accidentally get false positives from running so many comparisons at once.")
                         flat_data = []
                         flat_labels = []
                         for g_name, g_data in groups_data.items():
@@ -606,6 +608,53 @@ if df is not None:
                 st.warning("Please select at least one GPU to visualize.")
         else:
             st.warning("No GPU names found in the datasets to track.")
+
+    # --- 7. Q&A ---
+    with tab7:
+        st.header("7. Q&A")
+        
+        st.subheader("Category 1: Statistical Methodology & Rigor")
+        st.markdown("The \"Why\" behind your tests is often where professors probe deepest.")
+        
+        with st.expander("Q1: You used a Mann-Whitney U test for \"NVIDIA Tax\" but a One-Way ANOVA for \"Wattage Analysis.\" Why change the test type?"):
+            st.markdown("**The Armor:** You must explain your statistical workflow. The \"Historical Retail Price\" data was found to be heavily right-skewed, which strictly requires a non-parametric test like Mann-Whitney U to ensure accuracy. Conversely, the \"Watt Rating\" variable passed normality checks (Shapiro-Wilk), allowing for the more precise parametric One-Way ANOVA.")
+            
+        with st.expander("Q2: In your Mann-Whitney U test, you mention a U-statistic of 188. What does that number actually represent in this context?"):
+            st.markdown("**The Armor:** With 24 cards per brand, there are 576 possible one-on-one price matchups. The U-statistic of 188 means AMD was the more expensive card in only 188 of those pairings, while NVIDIA dominated the remaining 388. This imbalance is what drove the significant $p = 0.040$ result.")
+            
+        with st.expander("Q3: Your Chi-Square test for grouped market tiers returned a $p$-value of exactly 1.000. Isn't a \"perfect\" result suspicious?"):
+            st.markdown("**The Armor:** It is not an error but a result of flawless macro-architectural symmetry. Both manufacturers historically allocated exactly 13 units to the \"Budget Floor,\" 9 to the \"Enthusiast Core,\" and 2 to the \"Halo Tier\". The dataset is a perfectly mirrored matrix at the macro level, even if they differ at the micro level.")
+            
+        st.subheader("Category 2: Regression & Market Efficiency")
+        st.markdown("These questions test if you understand the \"Economic Logic\" of your data.")
+        
+        with st.expander("Q4: Why does the secondary market ($R^2 = 0.8967$) correlate so much better with performance than the retail market ($R^2 = 0.68$)?"):
+            st.markdown("**The Armor:** The retail market (MSRP) is heavily skewed by artificial product tiering, marketing hype, and brand premiums. In consumer-to-consumer sales (eBay), these factors are \"stripped away,\" distilling a GPU's financial value almost entirely down to its empirical rendering power (3DMark scores).")
+            
+        with st.expander("Q5: If 3DMark only explains 68% of retail price variance, what accounts for the remaining 32%?"):
+            st.markdown("**The Armor:** Your research identifies these \"hidden\" drivers as brand culture, supply chain constraints, and the \"NVIDIA Tax\". The statistical findings prove that retail pricing is a \"moderately strong\" but ultimately noisy predictor of hardware capability compared to the used market.")
+            
+        st.subheader("Category 3: VRAM Plateaus & Strategic Manipulation")
+        st.markdown("This is the \"Deep Insight\" section where you show you understand corporate strategy.")
+        
+        with st.expander("Q6: You claim 12GB and 16GB VRAM tiers are \"statistically indistinguishable\" ($p = 0.810$). Why does the market refuse to value that 4GB difference?"):
+            st.markdown("**The Armor:** Tukey's HSD analysis shows that standard gamers (who dominate these tiers) do not view 16GB as a high-enough leap to command a premium over 12GB. The \"Memory Premium\" only triggers at the 24GB tier ($p = 0.002$), which is decoupled from gaming and driven by inelastic prosumer demand for AI and data science.")
+            
+        with st.expander("Q7: How do NVIDIA and AMD use \"Micro-Segmentation\" differently to manipulate consumers?"):
+            st.markdown("**The Armor:** While they have identical \"bucket sizes\" (9 cards in the Enthusiast Core), their contents differ: AMD uses high-capacity 16GB models as a value differentiator. NVIDIA fragments their 9-card quota across 10GB, 11GB, and 12GB configurations to mathematically force aggressive upselling pathways.")
+            
+        st.subheader("Category 4: Architectural Efficiency")
+        
+        with st.expander("Q8: Your ANOVA showed no significant difference in power consumption ($p = 0.466$). What does this imply about NVIDIA's higher prices?"):
+            st.markdown("**The Armor:** Since NVIDIA commands a verified retail premium but operates within an indistinguishable power envelope compared to AMD, it proves they aren't using \"brute force\" (more electricity) to win. Their premium is instead sustained by superior architectural efficiency or dominant brand perception.")
+            
+        st.subheader("Quick-Fire Statistical \"Armor\" (Cheat Sheet)")
+        st.markdown("""
+- **Sample Size:** 48 discrete GPUs.
+- **Comparison of Averages:** NVIDIA: $612.49 retail vs. AMD: $387.53.
+- **Wattage Noise:** The 20W difference (211W vs 191W) is statistically meaningless noise because the $F$-statistic was below 1.0.
+- **Post-Hoc Test:** You used Tukey's HSD specifically to find which VRAM pairs were responsible for the overall variance.
+""")
 
 else:
     st.info("Awaiting data load to initialize analysis sections.")
